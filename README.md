@@ -1,26 +1,31 @@
-# MHGU Mod Manager
+# MHGURecomp Mod Manager
 
-โปรแกรม Windows สำหรับจัดการม็อดของ MHGURecomp
+A Windows desktop app for installing and managing mods for MHGURecomp.
 
-หน้าต่างเริ่มต้นเป็นโหมดมืดและภาษา English สามารถสลับเป็นโหมดสว่างหรือภาษาไทยได้จากปุ่มมุมขวาบน การตั้งค่าจะถูกจำไว้เมื่อเปิดครั้งถัดไป ปุ่ม **Open game** อยู่มุมขวาบน
+The app starts in dark mode and English. Use the buttons in the top-right corner to switch to light mode or Thai. Your preferences are saved for the next launch. The **Open game** button is also in the top-right corner.
 
-## เปิดใช้งาน
+## Requirements
 
-เปิดไฟล์ `MHGU Mod Manager.exe` ได้โดยตรง โปรแกรมถูกแพ็กเป็นไฟล์เดียว แต่เครื่องที่เปิดยังต้องมี **.NET 8 Desktop Runtime สำหรับ Windows**
+- Windows
+- .NET 8 Desktop Runtime
+- 7-Zip installed to import `.7z` archives
 
-1. เลือกโฟลเดอร์ MHGURecomp ที่มี `mhgurecomp.exe`
-2. ลากไฟล์ ZIP / 7Z หรือโฟลเดอร์ม็อดมาวาง หรือกด **ติดตั้ง ZIP / 7Z** / **เพิ่มโฟลเดอร์**
-3. ใช้สวิตช์หน้าชื่อม็อดเพื่อเปิดหรือปิด แล้วเริ่มเกมใหม่เพื่อใช้การเปลี่ยนแปลง
+## Use
 
-ไฟล์ ZIP จะใช้ตัวแตกไฟล์ใน .NET ส่วนไฟล์ 7Z ต้องติดตั้ง 7-Zip บนเครื่อง โปรแกรมตรวจ path ใน archive และตรวจหา `romfs/` / `exefs/` รวมถึงโครงสร้าง `atmosphere/contents/<title-id>/` ก่อนติดตั้งเป็น `mods/<ชื่อม็อด>/`
+1. Open `MHGU Mod Manager.exe`.
+2. Select the MHGURecomp folder containing `mhgurecomp.exe`.
+3. Drop a ZIP/7Z archive or mod folder into the app, or choose **Install ZIP / 7Z** or **Add folder**.
+4. Use the switch beside each mod to enable or disable it. Move mods up or down to change their load order.
+5. Restart the game for changes to take effect.
 
-สถานะและลำดับจะถูกบันทึกใน `mods/load_order.txt` ตามรูปแบบที่ MHGURecomp อ่าน ม็อดที่ลบจะถูกส่งไปถังรีไซเคิล
+ZIP files are extracted with .NET. The app uses 7-Zip to inspect and extract `.7z` archives. It checks archive paths and looks for `romfs/`, `exefs/`, and layouts such as `atmosphere/contents/<title-id>/` before installing a mod under `mods/<mod-name>/`.
 
-## สร้างโปรแกรม
+Enabled states and load order are saved in `mods/load_order.txt`, which MHGURecomp reads at startup. Removing a mod sends its folder to the Recycle Bin.
 
-ต้องใช้ Windows และ .NET 8 SDK:
+## Build
+
+Install the .NET 8 SDK on Windows, then run:
 
 ```powershell
 dotnet publish .\MHGUModManager.csproj -c Release --self-contained false
 ```
-
