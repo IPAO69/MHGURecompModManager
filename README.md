@@ -22,6 +22,12 @@ ZIP files are extracted with .NET. The app uses 7-Zip to inspect and extract `.7
 
 Enabled states and load order are saved in `mods/load_order.txt`, which MHGURecomp reads at startup. Removing a mod sends its folder to the Recycle Bin.
 
+## Engine Modules
+
+The app detects an Engine Module when a folder in an imported ZIP/7Z archive or source folder contains both `<module-name>.dll` and at least one `.ini` file side by side. It installs that folder as `engine_modules/<module-name>/`. The DLL name must match the installed folder name so MHGURecomp can load it.
+
+New Engine Modules start disabled. Use the **Engine Modules** tab to inspect the DLL/INI check, enable or disable a module, change its order, remove it, or open the `engine_modules` folder. The switches and order are written to `engine_modules/enabled.txt`; MHGURecomp applies them the next time the game starts. Modules are native code, so only enable modules from sources you trust.
+
 ## Build
 
 Install the .NET 8 SDK on Windows, then run:

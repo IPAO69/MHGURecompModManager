@@ -20,6 +20,7 @@ internal static class Program
 internal sealed class MainForm : Form
 {
     private const string ManagerMarker = "# Written by the Mods tab";
+    private const string EngineModuleMarker = "# Written by the Engine Modules tab";
     private const int RuntimeModLimit = 256;
     private readonly string _settingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -29,15 +30,23 @@ internal sealed class MainForm : Form
     private readonly Label _pathStatus = new();
     private readonly Label _footer = new();
     private readonly ListView _modsList = new();
+    private readonly ListView _engineModulesList = new();
+    private readonly TabControl _managerTabs = new();
+    private readonly TabPage _modsTab = new();
+    private readonly TabPage _engineModulesTab = new();
     private readonly Button _moveUp = new();
     private readonly Button _moveDown = new();
     private readonly Button _remove = new();
+    private readonly Button _openFolder = new();
     private readonly Button _themeToggle = new();
     private readonly Button _languageToggle = new();
     private readonly Button _launchButton = new();
     private readonly Dictionary<Control, (string Thai, string English)> _localizedControls = new();
     private string _modsDirectory = "";
+    private string _engineModulesDirectory = "";
     private List<ModEntry> _mods = new();
+    private List<EngineModuleEntry> _engineModules = new();
+    private List<string> _unmanagedEnabledModules = new();
     private bool _darkMode = true;
     private bool _english = true;
     private bool _footerIsStatus;
@@ -220,19 +229,19 @@ internal sealed class MainForm : Form
         var importFolder = MakeButton("", false);
         Localize(importFolder, "เพิ่มโฟลเดอร์", "Add folder");
         importFolder.Click += (_, _) => ChooseModFolder();
-        var openMods = MakeButton("", false);
-        Localize(openMods, "เปิดโฟลเดอร์ mods", "Open mods folder");
-        openMods.Click += (_, _) => OpenModsFolder();
+        StyleButton(_openFolder, false);
+        Localize(_openFolder, "เปิดโฟลเดอร์", "Open folder");
+        _openFolder.Click += (_, _) => OpenCurrentFolder();
         Localize(_moveUp, "ขึ้น ↑", "Move up ↑");
         StyleButton(_moveUp, false);
         _moveUp.Click += (_, _) => MoveSelected(-1);
         Localize(_moveDown, "ลง ↓", "Move down ↓");
         StyleButton(_moveDown, false);
         _moveDown.Click += (_, _) => MoveSelected(1);
-        Localize(_remove, "ลบม็อด", "Remove mod");
+        Localize(_remove, "ลบรายการ", "Remove item");
         StyleButton(_remove, false, Red);
-        _remove.Click += (_, _) => RemoveSelectedMod();
-        foreach (var button in new[] { importZip, importFolder, openMods, _moveUp, _moveDown, _remove })
+        _remove.Click += (_, _) => RemoveSelectedItem();
+        foreach (var button in new[] { importZip, importFolder, _openFolder, _moveUp, _moveDown, _remove })
         {
             button.Margin = new Padding(0, 0, 8, 0);
             toolbar.Controls.Add(button);
@@ -240,27 +249,32 @@ internal sealed class MainForm : Form
 
         var listCard = Card();
         listCard.Padding = new Padding(8);
-        _modsList.Dock = DockStyle.Fill;
-        _modsList.View = View.Details;
-        _modsList.FullRowSelect = true;
-        _modsList.GridLines = false;
-        _modsList.HideSelection = false;
-        _modsList.MultiSelect = false;
-        _modsList.OwnerDraw = true;
-        _modsList.BorderStyle = BorderStyle.None;
-        _modsList.Font = new Font(UiFontName, 10F);
-        _modsList.Columns.Add("ชื่อม็อด", 390);
-        _modsList.Columns.Add("เปิด / ปิด", 130);
-        _modsList.Columns.Add("โครงสร้างที่ตรวจพบ", 260);
-        _modsList.SmallImageList = new ImageList { ImageSize = new Size(1, 34), ColorDepth = ColorDepth.Depth32Bit };
-        _modsList.BackColor = Palette.Surface;
-        _modsList.ForeColor = Palette.Text;
-        _modsList.DrawColumnHeader += DrawModColumnHeader;
-        _modsList.DrawItem += (_, _) => { };
-        _modsList.DrawSubItem += DrawModSubItem;
-        _modsList.MouseClick += OnModListMouseClick;
+        ConfigureToggleList(_modsList, new[] { ("ชื่อม็อด", "Mod name", 330), ("เปิด / ปิด", "Enabled", 120), ("โครงสร้างที่ตรวจพบ", "Detected structure", 300) }, OnModListMouseClick);
         _modsList.SelectedIndexChanged += (_, _) => UpdateToolbarState();
-        listCard.Controls.Add(_modsList);
+        ConfigureToggleList(_engineModulesList,
+            new[] { ("โมดูล", "Module", 330), ("เปิด / ปิด", "Enabled", 120), ("ตรวจสอบไฟล์", "File check", 300) },
+            OnEngineModuleListMouseClick);
+        _engineModulesList.SelectedIndexChanged += (_, _) => UpdateToolbarState();
+        Localize(_modsTab, "ม็อด", "Mods");
+        Localize(_engineModulesTab, "Engine Modules", "Engine Modules");
+        _modsTab.Padding = new Padding(6);
+        _engineModulesTab.Padding = new Padding(6);
+        _modsTab.Controls.Add(_modsList);
+        _engineModulesTab.Controls.Add(_engineModulesList);
+        _managerTabs.Dock = DockStyle.Fill;
+        _managerTabs.DrawMode = TabDrawMode.OwnerDrawFixed;
+        _managerTabs.ItemSize = new Size(150, 32);
+        _managerTabs.SizeMode = TabSizeMode.Fixed;
+        _managerTabs.Tag = "tabs";
+        _managerTabs.Controls.Add(_modsTab);
+        _managerTabs.Controls.Add(_engineModulesTab);
+        _managerTabs.DrawItem += DrawManagerTab;
+        _managerTabs.SelectedIndexChanged += (_, _) =>
+        {
+            UpdateToolbarState();
+            UpdateFooterForCurrentTab();
+        };
+        listCard.Controls.Add(_managerTabs);
         modsArea.Controls.Add(toolbar, 0, 0);
         modsArea.Controls.Add(listCard, 0, 1);
 
@@ -284,8 +298,8 @@ internal sealed class MainForm : Form
             AllowDrop = true
         };
         Localize(dropLabel,
-            "ลากไฟล์ ZIP / 7Z หรือโฟลเดอร์มาวางที่นี่  ·  ตรวจหา romfs / exefs ให้อัตโนมัติ",
-            "Drop a ZIP / 7Z archive or mod folder here  ·  romfs / exefs are checked automatically");
+            "ลาก ZIP / 7Z หรือโฟลเดอร์มาวาง  ·  ตรวจหา romfs / exefs และ Engine Module (.dll + .ini) อัตโนมัติ",
+            "Drop a ZIP / 7Z or folder  ·  romfs / exefs and Engine Modules (.dll + .ini) are detected automatically");
         dropZone.Paint += (_, e) => ControlPaint.DrawBorder(e.Graphics, dropZone.ClientRectangle,
             Palette.Border, ButtonBorderStyle.Solid);
         dropZone.Controls.Add(dropLabel);
@@ -406,12 +420,8 @@ internal sealed class MainForm : Form
 
         _languageToggle.Text = _english ? "ไทย" : "English";
         _themeToggle.Text = _darkMode ? T("โหมดสว่าง", "Light mode") : T("โหมดมืด", "Dark mode");
-        if (_modsList.Columns.Count >= 3)
-        {
-            _modsList.Columns[0].Text = T("ชื่อม็อด", "Mod name");
-            _modsList.Columns[1].Text = T("เปิด / ปิด", "Enabled");
-            _modsList.Columns[2].Text = T("โครงสร้างที่ตรวจพบ", "Detected structure");
-        }
+        ApplyListColumnHeaders(_modsList, new[] { ("ชื่อม็อด", "Mod name"), ("เปิด / ปิด", "Enabled"), ("โครงสร้างที่ตรวจพบ", "Detected structure") });
+        ApplyListColumnHeaders(_engineModulesList, new[] { ("โมดูล", "Module"), ("เปิด / ปิด", "Enabled"), ("ตรวจสอบไฟล์", "File check") });
 
         if (TryGetGamePaths(out _, out var mods))
             _pathStatus.Text = T($"พบ mhgurecomp.exe  ·  โฟลเดอร์ม็อด: {mods}", $"Found mhgurecomp.exe  ·  Mods folder: {mods}");
@@ -445,6 +455,8 @@ internal sealed class MainForm : Form
         _themeToggle.Text = _darkMode ? T("โหมดสว่าง", "Light mode") : T("โหมดมืด", "Dark mode");
         ApplyThemeToControl(this);
         _modsList.Invalidate();
+        _engineModulesList.Invalidate();
+        _managerTabs.Invalidate();
         Invalidate(true);
         ResumeLayout(true);
     }
@@ -479,6 +491,14 @@ internal sealed class MainForm : Form
                 listView.BackColor = Palette.Surface;
                 listView.ForeColor = Palette.Text;
                 break;
+            case TabControl tabControl:
+                tabControl.BackColor = Palette.Surface;
+                tabControl.ForeColor = Palette.Text;
+                break;
+            case TabPage tabPage:
+                tabPage.BackColor = Palette.Surface;
+                tabPage.ForeColor = Palette.Text;
+                break;
             case Label label:
                 label.ForeColor = role switch
                 {
@@ -512,13 +532,59 @@ internal sealed class MainForm : Form
 
     private void DrawModColumnHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
     {
+        var list = sender as ListView ?? _modsList;
         using var background = new SolidBrush(Palette.Header);
         e.Graphics.FillRectangle(background, e.Bounds);
-        TextRenderer.DrawText(e.Graphics, e.Header?.Text ?? "", _modsList.Font,
+        TextRenderer.DrawText(e.Graphics, e.Header?.Text ?? "", list.Font,
             Rectangle.Inflate(e.Bounds, -10, 0), Palette.HeaderText,
             TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
         using var border = new Pen(Palette.Border);
         e.Graphics.DrawLine(border, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
+    }
+
+    private void ConfigureToggleList(ListView list, (string Thai, string English, int Width)[] columns, MouseEventHandler clickHandler)
+    {
+        list.Dock = DockStyle.Fill;
+        list.View = View.Details;
+        list.FullRowSelect = true;
+        list.GridLines = false;
+        list.HideSelection = false;
+        list.MultiSelect = false;
+        list.OwnerDraw = true;
+        list.BorderStyle = BorderStyle.None;
+        list.Font = new Font(UiFontName, 10F);
+        foreach (var column in columns)
+            list.Columns.Add(T(column.Thai, column.English), column.Width);
+        list.SmallImageList = new ImageList { ImageSize = new Size(1, 36), ColorDepth = ColorDepth.Depth32Bit };
+        list.BackColor = Palette.Surface;
+        list.ForeColor = Palette.Text;
+        list.DrawColumnHeader += DrawModColumnHeader;
+        list.DrawItem += (_, _) => { };
+        list.DrawSubItem += DrawModSubItem;
+        list.MouseClick += clickHandler;
+    }
+
+    private void ApplyListColumnHeaders(ListView list, (string Thai, string English)[] columns)
+    {
+        for (var i = 0; i < Math.Min(list.Columns.Count, columns.Length); i++)
+            list.Columns[i].Text = T(columns[i].Thai, columns[i].English);
+    }
+
+    private void DrawManagerTab(object? sender, DrawItemEventArgs e)
+    {
+        if (e.Index < 0 || e.Index >= _managerTabs.TabPages.Count) return;
+        var bounds = _managerTabs.GetTabRect(e.Index);
+        var selected = e.Index == _managerTabs.SelectedIndex;
+        using var background = new SolidBrush(selected ? Palette.SelectedRow : Palette.Surface);
+        e.Graphics.FillRectangle(background, bounds);
+        TextRenderer.DrawText(e.Graphics, _managerTabs.TabPages[e.Index].Text, Font,
+            bounds, selected ? Palette.Primary : Palette.Muted,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        if (selected)
+        {
+            using var underline = new Pen(Palette.Primary, 2);
+            e.Graphics.DrawLine(underline, bounds.Left + 10, bounds.Bottom - 2, bounds.Right - 10, bounds.Bottom - 2);
+        }
     }
 
     private void ChooseGameFolder()
@@ -547,8 +613,12 @@ internal sealed class MainForm : Form
         if (!TryGetGamePaths(out var root, out var mods))
         {
             _modsDirectory = "";
+            _engineModulesDirectory = "";
             _mods.Clear();
+            _engineModules.Clear();
+            _unmanagedEnabledModules.Clear();
             RenderMods();
+            RenderEngineModules();
             _pathStatus.ForeColor = Red;
             _pathStatus.Text = T("ไม่พบ mhgurecomp.exe — เลือกโฟลเดอร์ติดตั้งเกมก่อน", "mhgurecomp.exe not found — choose the game install folder");
             SetStatus(T("ตรวจสอบตำแหน่งเกมไม่ผ่าน", "Game folder check failed"), false);
@@ -556,7 +626,9 @@ internal sealed class MainForm : Form
         }
 
         _modsDirectory = mods;
+        _engineModulesDirectory = Path.Combine(root, "engine_modules");
         Directory.CreateDirectory(_modsDirectory);
+        Directory.CreateDirectory(_engineModulesDirectory);
         SaveSettings();
         RefreshMods();
         _pathStatus.ForeColor = Green;
@@ -569,8 +641,12 @@ internal sealed class MainForm : Form
         if (!TryGetGamePaths(out _, out var mods))
         {
             _modsDirectory = "";
+            _engineModulesDirectory = "";
             _mods.Clear();
+            _engineModules.Clear();
+            _unmanagedEnabledModules.Clear();
             RenderMods();
+            RenderEngineModules();
             if (string.IsNullOrWhiteSpace(_gamePath.Text))
                 _pathStatus.Text = T("เลือกโฟลเดอร์ที่มี mhgurecomp.exe เพื่อเริ่มใช้งาน", "Choose the folder containing mhgurecomp.exe to get started");
             else
@@ -582,11 +658,15 @@ internal sealed class MainForm : Form
         }
 
         _modsDirectory = mods;
+        _engineModulesDirectory = Path.Combine(Path.GetDirectoryName(mods)!, "engine_modules");
         Directory.CreateDirectory(_modsDirectory);
+        Directory.CreateDirectory(_engineModulesDirectory);
         try
         {
             _mods = ReadModList();
+            _engineModules = ReadEngineModuleList();
             RenderMods();
+            RenderEngineModules();
             _pathStatus.ForeColor = Green;
             _pathStatus.Text = T($"พบ mhgurecomp.exe  ·  โฟลเดอร์ม็อด: {_modsDirectory}", $"Found mhgurecomp.exe  ·  Mods folder: {_modsDirectory}");
         }
@@ -642,6 +722,64 @@ internal sealed class MainForm : Form
         return result;
     }
 
+    private List<EngineModuleEntry> ReadEngineModuleList()
+    {
+        var folderNames = Directory.GetDirectories(_engineModulesDirectory)
+            .Select(Path.GetFileName)
+            .Where(name => !string.IsNullOrWhiteSpace(name) && !name.StartsWith(".", StringComparison.Ordinal))
+            .Cast<string>()
+            .ToList();
+        var enabledPath = Path.Combine(_engineModulesDirectory, "enabled.txt");
+        var lines = File.Exists(enabledPath) ? File.ReadAllLines(enabledPath) : Array.Empty<string>();
+        var managerFile = lines.Length > 0 && lines[0].TrimStart().StartsWith(EngineModuleMarker, StringComparison.Ordinal);
+        var states = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var explicitOrder = new List<string>();
+        _unmanagedEnabledModules.Clear();
+
+        foreach (var raw in lines)
+        {
+            var line = raw.Trim();
+            if (line.Length == 0) continue;
+            var enabled = true;
+            if (managerFile && line.StartsWith("# off: ", StringComparison.Ordinal))
+            {
+                enabled = false;
+                line = line[7..].Trim();
+            }
+            else if (line.StartsWith('#')) continue;
+            if (line.Length == 0) continue;
+            if (!folderNames.Contains(line, StringComparer.OrdinalIgnoreCase))
+            {
+                if (enabled && IsSafeEngineModuleName(line) && !_unmanagedEnabledModules.Contains(line, StringComparer.OrdinalIgnoreCase))
+                    _unmanagedEnabledModules.Add(line);
+                continue;
+            }
+            if (states.ContainsKey(line)) continue;
+            states[line] = enabled;
+            explicitOrder.Add(line);
+        }
+
+        var orderedNames = explicitOrder.Concat(folderNames
+                .Where(name => !states.ContainsKey(name))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+        return orderedNames.Select(name =>
+        {
+            var folder = Path.Combine(_engineModulesDirectory, name);
+            var expectedDll = File.Exists(Path.Combine(folder, name + ".dll"));
+            var hasIni = SafeGetFiles(folder, "*.ini").Length > 0;
+            var valid = expectedDll && hasIni;
+            var details = valid
+                ? T("พบ DLL และ INI", "DLL and INI found")
+                : !expectedDll && !hasIni
+                    ? T($"ไม่พบ {name}.dll หรือ .ini", $"Missing {name}.dll and .ini")
+                    : !expectedDll
+                        ? T($"ไม่พบ {name}.dll", $"Missing {name}.dll")
+                        : T("ไม่พบไฟล์ .ini", "Missing .ini file");
+            return new EngineModuleEntry(name, states.TryGetValue(name, out var enabled) && enabled, valid, details);
+        }).ToList();
+    }
+
     private void RenderMods()
     {
         _modsList.BeginUpdate();
@@ -662,10 +800,48 @@ internal sealed class MainForm : Form
         }
         _modsList.EndUpdate();
         UpdateToolbarState();
+        UpdateFooterForCurrentTab();
+    }
+
+    private void RenderEngineModules()
+    {
+        _engineModulesList.BeginUpdate();
+        _engineModulesList.Items.Clear();
+        foreach (var module in _engineModules)
+        {
+            var item = new ListViewItem(module.Name) { Tag = module };
+            item.SubItems.Add(module.Enabled ? T("เปิด", "On") : T("ปิด", "Off"));
+            item.SubItems.Add(module.Details);
+            if (!module.Valid)
+            {
+                item.ForeColor = Palette.Warning;
+                item.ToolTipText = T("Engine Module ต้องมีไฟล์ <ชื่อโมดูล>.dll และไฟล์ .ini ในโฟลเดอร์เดียวกัน",
+                    "An Engine Module needs <module name>.dll and an .ini file in the same folder");
+            }
+            _engineModulesList.Items.Add(item);
+        }
+        _engineModulesList.EndUpdate();
+        UpdateToolbarState();
+        UpdateFooterForCurrentTab();
+    }
+
+    private void UpdateFooterForCurrentTab()
+    {
         _footerIsStatus = false;
-        _footer.Text = _mods.Count == 0
-            ? T("ยังไม่มีม็อด · ลาก ZIP / 7Z มาวาง หรือกด “ติดตั้ง ZIP”  ·  สวิตช์จะมีผลเมื่อเริ่มเกมใหม่", "No mods yet · Drop a ZIP / 7Z or click Install ZIP · Changes apply after restarting the game")
-            : T($"มี {_mods.Count} ม็อด  ·  เปิด {_mods.Count(m => m.Enabled)}  ·  สวิตช์และลำดับมีผลเมื่อเริ่มเกมใหม่ ผ่าน mods\\load_order.txt", $"{_mods.Count} mods  ·  {_mods.Count(m => m.Enabled)} enabled  ·  Switches and order apply after restarting the game (mods\\load_order.txt)");
+        if (IsEngineModulesTab)
+        {
+            _footer.Text = _engineModules.Count == 0
+                ? T("ยังไม่มี Engine Module · เพิ่ม ZIP / 7Z หรือโฟลเดอร์ที่มี .dll และ .ini · โมดูลใหม่จะปิดไว้ก่อน",
+                    "No Engine Modules yet · Add a ZIP / 7Z or folder containing a .dll and .ini · New modules start disabled")
+                : T($"มี {_engineModules.Count} โมดูล · เปิด {_engineModules.Count(m => m.Enabled)} · สวิตช์เขียนไป engine_modules\\enabled.txt และมีผลเมื่อเริ่มเกมใหม่",
+                    $"{_engineModules.Count} Engine Modules · {_engineModules.Count(m => m.Enabled)} enabled · Switches write to engine_modules\\enabled.txt and apply after restarting the game");
+        }
+        else
+        {
+            _footer.Text = _mods.Count == 0
+                ? T("ยังไม่มีม็อด · ลาก ZIP / 7Z มาวาง หรือกด “ติดตั้ง ZIP” · สวิตช์จะมีผลเมื่อเริ่มเกมใหม่", "No mods yet · Drop a ZIP / 7Z or click Install ZIP · Changes apply after restarting the game")
+                : T($"มี {_mods.Count} ม็อด · เปิด {_mods.Count(m => m.Enabled)} · สวิตช์และลำดับมีผลเมื่อเริ่มเกมใหม่ ผ่าน mods\\load_order.txt", $"{_mods.Count} mods · {_mods.Count(m => m.Enabled)} enabled · Switches and order apply after restarting the game (mods\\load_order.txt)");
+        }
     }
 
     private void DrawModSubItem(object? sender, DrawListViewSubItemEventArgs e)
@@ -680,24 +856,25 @@ internal sealed class MainForm : Form
         using (var border = new Pen(Palette.RowBorder))
             e.Graphics.DrawLine(border, bounds.Left, bounds.Bottom - 1, bounds.Right, bounds.Bottom - 1);
 
-        if (e.ColumnIndex == 1 && item.Tag is ModEntry mod)
+        var list = sender as ListView ?? _modsList;
+        if (e.ColumnIndex == 1 && item.Tag is IToggleEntry toggle)
         {
             var track = new Rectangle(bounds.Left + 12, bounds.Top + (bounds.Height - 22) / 2, 44, 22);
-            using var trackBrush = new SolidBrush(mod.Enabled ? Green : Palette.SwitchOff);
+            using var trackBrush = new SolidBrush(toggle.Enabled ? Green : Palette.SwitchOff);
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             e.Graphics.FillEllipse(trackBrush, track);
-            var knobX = mod.Enabled ? track.Right - 19 : track.Left + 2;
+            var knobX = toggle.Enabled ? track.Right - 19 : track.Left + 2;
             using var knobBrush = new SolidBrush(Color.White);
             e.Graphics.FillEllipse(knobBrush, new Rectangle(knobX, track.Top + 2, 18, 18));
-            TextRenderer.DrawText(e.Graphics, mod.Enabled ? T("เปิด", "On") : T("ปิด", "Off"), _modsList.Font,
+            TextRenderer.DrawText(e.Graphics, toggle.Enabled ? T("เปิด", "On") : T("ปิด", "Off"), list.Font,
                 new Rectangle(track.Right + 8, bounds.Top, bounds.Right - track.Right - 8, bounds.Height),
-                selected ? Ink : (mod.Enabled ? Green : Muted),
+                selected ? Ink : (toggle.Enabled ? Green : Muted),
                 TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
             return;
         }
 
         var textColor = selected ? Ink : item.ForeColor;
-        TextRenderer.DrawText(e.Graphics, subItem.Text, _modsList.Font,
+        TextRenderer.DrawText(e.Graphics, subItem.Text, list.Font,
             Rectangle.Inflate(bounds, -10, 0), textColor,
             TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
     }
@@ -713,25 +890,61 @@ internal sealed class MainForm : Form
         SaveLoadOrderAndRefresh(T("บันทึกสวิตช์ม็อดแล้ว", "Mod switch saved"));
     }
 
+    private void OnEngineModuleListMouseClick(object? sender, MouseEventArgs e)
+    {
+        var hit = _engineModulesList.HitTest(e.Location);
+        if (hit.Item is null || hit.SubItem is null || hit.Item.SubItems.IndexOf(hit.SubItem) != 1) return;
+        var index = hit.Item.Index;
+        if (index < 0 || index >= _engineModules.Count) return;
+        var module = _engineModules[index];
+        if (!module.Valid && !module.Enabled)
+        {
+            MessageBox.Show(this,
+                T("ไฟล์ Engine Module ไม่ครบหรือชื่อ DLL ไม่ตรงกับชื่อโฟลเดอร์ ตรวจสอบให้มี <ชื่อโฟลเดอร์>.dll และไฟล์ .ini อยู่ในโฟลเดอร์เดียวกันก่อนเปิดใช้",
+                    "This Engine Module is incomplete or its DLL name does not match its folder. Add <folder name>.dll and an .ini file to the same folder before enabling it."),
+                T("ตรวจสอบ Engine Module", "Check Engine Module"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        _engineModules[index] = module with { Enabled = !module.Enabled };
+        SaveEngineModuleStateAndRefresh(T("บันทึกสวิตช์ Engine Module แล้ว", "Engine Module switch saved"));
+    }
+
     private void UpdateToolbarState()
     {
-        var selected = _modsList.SelectedIndices.Count > 0;
-        var i = selected ? _modsList.SelectedIndices[0] : -1;
+        var list = IsEngineModulesTab ? _engineModulesList : _modsList;
+        var count = IsEngineModulesTab ? _engineModules.Count : _mods.Count;
+        var selected = list.SelectedIndices.Count > 0;
+        var i = selected ? list.SelectedIndices[0] : -1;
         _moveUp.Enabled = selected && i > 0;
-        _moveDown.Enabled = selected && i < _mods.Count - 1;
+        _moveDown.Enabled = selected && i < count - 1;
         _remove.Enabled = selected;
+        _openFolder.Text = T(IsEngineModulesTab ? "เปิด engine_modules" : "เปิด mods",
+            IsEngineModulesTab ? "Open engine_modules" : "Open mods");
+        _remove.Text = T(IsEngineModulesTab ? "ลบโมดูล" : "ลบม็อด", IsEngineModulesTab ? "Remove module" : "Remove mod");
     }
 
     private void MoveSelected(int delta)
     {
-        if (_modsList.SelectedIndices.Count == 0) return;
-        var from = _modsList.SelectedIndices[0];
+        var list = IsEngineModulesTab ? _engineModulesList : _modsList;
+        if (list.SelectedIndices.Count == 0) return;
+        var from = list.SelectedIndices[0];
         var to = from + delta;
-        if (to < 0 || to >= _mods.Count) return;
-        (_mods[from], _mods[to]) = (_mods[to], _mods[from]);
-        SaveLoadOrderAndRefresh(T("บันทึกลำดับม็อดแล้ว", "Mod order saved"));
-        if (to < _modsList.Items.Count) _modsList.Items[to].Selected = true;
+        var count = IsEngineModulesTab ? _engineModules.Count : _mods.Count;
+        if (to < 0 || to >= count) return;
+        if (IsEngineModulesTab)
+        {
+            (_engineModules[from], _engineModules[to]) = (_engineModules[to], _engineModules[from]);
+            SaveEngineModuleStateAndRefresh(T("บันทึกลำดับ Engine Module แล้ว", "Engine Module order saved"));
+        }
+        else
+        {
+            (_mods[from], _mods[to]) = (_mods[to], _mods[from]);
+            SaveLoadOrderAndRefresh(T("บันทึกลำดับม็อดแล้ว", "Mod order saved"));
+        }
+        if (to < list.Items.Count) list.Items[to].Selected = true;
     }
+
+    private bool IsEngineModulesTab => _managerTabs.SelectedTab == _engineModulesTab;
 
     private void SaveLoadOrderAndRefresh(string message)
     {
@@ -745,6 +958,23 @@ internal sealed class MainForm : Form
         {
             SetStatus(T($"บันทึกสถานะม็อดไม่ได้: {ex.Message}", $"Could not save mod settings: {ex.Message}"), false);
             MessageBox.Show(this, ex.Message, T("บันทึก load_order.txt ไม่สำเร็จ", "Could not save load_order.txt"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+            RefreshMods();
+        }
+    }
+
+    private void SaveEngineModuleStateAndRefresh(string message)
+    {
+        try
+        {
+            SaveEngineModuleState();
+            _engineModules = ReadEngineModuleList();
+            RenderEngineModules();
+            SetStatus(message, true);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(T($"บันทึกสถานะ Engine Module ไม่ได้: {ex.Message}", $"Could not save Engine Module settings: {ex.Message}"), false);
+            MessageBox.Show(this, ex.Message, T("บันทึก enabled.txt ไม่สำเร็จ", "Could not save enabled.txt"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             RefreshMods();
         }
     }
@@ -764,6 +994,23 @@ internal sealed class MainForm : Form
         File.Move(tempPath, orderPath, true);
     }
 
+    private void SaveEngineModuleState()
+    {
+        Directory.CreateDirectory(_engineModulesDirectory);
+        var enabledPath = Path.Combine(_engineModulesDirectory, "enabled.txt");
+        var tempPath = enabledPath + ".tmp";
+        using (var writer = new StreamWriter(tempPath, false, new UTF8Encoding(false)))
+        {
+            writer.WriteLine(EngineModuleMarker + " (one enabled module folder name per line).");
+            writer.WriteLine("# Lines beginning with # are ignored by MHGURecomp.");
+            foreach (var module in _engineModules)
+                writer.WriteLine(module.Enabled ? module.Name : "# off: " + module.Name);
+            foreach (var name in _unmanagedEnabledModules)
+                writer.WriteLine(name);
+        }
+        File.Move(tempPath, enabledPath, true);
+    }
+
     private void ChooseArchiveFiles()
     {
         using var dialog = new OpenFileDialog
@@ -779,7 +1026,7 @@ internal sealed class MainForm : Form
 
     private void ChooseModFolder()
     {
-        using var dialog = new FolderBrowserDialog { Description = T("เลือกโฟลเดอร์ของม็อดที่มี romfs หรือ exefs", "Choose a mod folder containing romfs or exefs"), UseDescriptionForTitle = true };
+        using var dialog = new FolderBrowserDialog { Description = T("เลือกโฟลเดอร์ม็อด หรือ Engine Module ที่มี .dll และ .ini", "Choose a mod folder or Engine Module containing a .dll and .ini"), UseDescriptionForTitle = true };
         if (dialog.ShowDialog(this) == DialogResult.OK)
             ImportItems(new[] { dialog.SelectedPath });
     }
@@ -807,10 +1054,12 @@ internal sealed class MainForm : Form
 
     private bool EnsureGameFolder()
     {
-        if (TryGetGamePaths(out _, out var mods))
+        if (TryGetGamePaths(out var root, out var mods))
         {
             _modsDirectory = mods;
+            _engineModulesDirectory = Path.Combine(root, "engine_modules");
             Directory.CreateDirectory(mods);
+            Directory.CreateDirectory(_engineModulesDirectory);
             return true;
         }
         MessageBox.Show(this, T("กรุณาเลือกโฟลเดอร์ MHGURecomp ที่มี mhgurecomp.exe ก่อน", "Choose the MHGURecomp folder containing mhgurecomp.exe first"),
@@ -827,11 +1076,20 @@ internal sealed class MainForm : Form
         try
         {
             ExtractArchiveSafely(archivePath, extractPath);
+            var engineModule = FindEngineModuleContent(extractPath);
             var sourceRoot = FindModContentRoot(extractPath);
+            if (engineModule is not null && sourceRoot is not null)
+                throw new InvalidDataException(T("แพ็กเกจมีทั้ง Engine Module และโฟลเดอร์ม็อด กรุณาแยกติดตั้งคนละไฟล์", "This package contains both an Engine Module and a regular mod. Install them from separate archives."));
+            if (engineModule is not null)
+            {
+                if (!InstallEngineModule(engineModule)) return;
+                SetStatus(T($"ติดตั้ง Engine Module {engineModule.Name} แล้ว (ปิดไว้ตามค่าเริ่มต้น)", $"Installed Engine Module {engineModule.Name} (disabled by default)"), true);
+                return;
+            }
             if (sourceRoot is null)
                 throw new InvalidDataException(T(
-                    "ใน archive ไม่พบโฟลเดอร์ romfs หรือ exefs ที่ MHGURecomp ใช้งานได้ (ค้นหาลึกไม่เกิน 3 ระดับ)\n\nโครงสร้างที่รองรับ เช่น romfs/..., exefs/... หรือ atmosphere/contents/<title-id>/{romfs,exefs}.",
-                    "No supported romfs or exefs folder was found in the archive (searched up to 3 levels deep).\n\nSupported layouts include romfs/..., exefs/..., or atmosphere/contents/<title-id>/{romfs,exefs}."));
+                    "ไม่พบโครงสร้างม็อด romfs / exefs หรือ Engine Module ที่มี <ชื่อ>.dll และ .ini ในโฟลเดอร์เดียวกัน\n\nม็อดรองรับ romfs/..., exefs/... หรือ atmosphere/contents/<title-id>/{romfs,exefs}.",
+                    "No supported romfs / exefs mod or Engine Module with <name>.dll and .ini in the same folder was found.\n\nMod layouts include romfs/..., exefs/..., or atmosphere/contents/<title-id>/{romfs,exefs}."));
             InstallModTree(sourceRoot, modName);
             SetStatus(T($"ติดตั้ง {modName} จาก archive แล้ว", $"Installed {modName} from archive"), true);
         }
@@ -843,12 +1101,91 @@ internal sealed class MainForm : Form
 
     private void ImportFolder(string folder)
     {
+        var engineModule = FindEngineModuleContent(folder);
         var sourceRoot = FindModContentRoot(folder);
+        if (engineModule is not null && sourceRoot is not null)
+            throw new InvalidDataException(T("โฟลเดอร์มีทั้ง Engine Module และม็อด กรุณาแยกติดตั้งคนละโฟลเดอร์", "This folder contains both an Engine Module and a regular mod. Install them separately."));
+        if (engineModule is not null)
+        {
+            if (!InstallEngineModule(engineModule)) return;
+            SetStatus(T($"ติดตั้ง Engine Module {engineModule.Name} แล้ว (ปิดไว้ตามค่าเริ่มต้น)", $"Installed Engine Module {engineModule.Name} (disabled by default)"), true);
+            return;
+        }
         if (sourceRoot is null)
-            throw new InvalidDataException(T("ไม่พบโฟลเดอร์ romfs หรือ exefs ที่เกมค้นหาได้ภายในโฟลเดอร์นี้", "No romfs or exefs folder was found in a location the game can load"));
+            throw new InvalidDataException(T("ไม่พบโฟลเดอร์ romfs / exefs หรือ Engine Module ที่มี <ชื่อ>.dll และ .ini ในโฟลเดอร์เดียวกัน", "No loadable romfs / exefs folder or Engine Module with <name>.dll and .ini in the same folder was found"));
         var modName = SanitizeModName(new DirectoryInfo(folder).Name);
         InstallModTree(sourceRoot, modName);
         SetStatus(T($"เพิ่มม็อด {modName} แล้ว", $"Added mod {modName}"), true);
+    }
+
+    private bool InstallEngineModule(EngineModuleSource source)
+    {
+        if (!IsSafeEngineModuleName(source.Name))
+            throw new InvalidDataException(T("ชื่อ Engine Module ต้องใช้ a-z, 0-9, จุด, ขีดล่าง หรือขีดกลาง และห้ามขึ้นต้นด้วยจุด",
+                "Engine Module names may use a-z, 0-9, dot, underscore, or hyphen, and cannot start with a dot"));
+        if (!File.Exists(Path.Combine(source.Path, source.Name + ".dll")) ||
+            SafeGetFiles(source.Path, "*.ini").Length == 0)
+            throw new InvalidDataException(T("Engine Module ต้องมีไฟล์ <ชื่อโมดูล>.dll และไฟล์ .ini อยู่ในโฟลเดอร์เดียวกัน",
+                "An Engine Module must contain <module name>.dll and an .ini file in the same folder"));
+
+        Directory.CreateDirectory(_engineModulesDirectory);
+        _engineModules = ReadEngineModuleList();
+        var destination = Path.Combine(_engineModulesDirectory, source.Name);
+        var hadOld = Directory.Exists(destination);
+        var existing = _engineModules.FirstOrDefault(m => string.Equals(m.Name, source.Name, StringComparison.OrdinalIgnoreCase));
+        if (hadOld)
+        {
+            var answer = MessageBox.Show(this,
+                T($"มี Engine Module ชื่อ “{source.Name}” อยู่แล้ว ต้องการแทนที่หรือไม่?", $"An Engine Module named “{source.Name}” already exists. Replace it?"),
+                T("ยืนยันการแทนที่", "Confirm replacement"), MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes) return false;
+        }
+
+        var stage = Path.Combine(_engineModulesDirectory, ".mm_staging_" + Guid.NewGuid().ToString("N"));
+        var backup = Path.Combine(Path.GetTempPath(), "MHGU-Mod-Manager", "engine-backup-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(stage);
+        try
+        {
+            CopyDirectory(source.Path, stage);
+            if (!File.Exists(Path.Combine(stage, source.Name + ".dll")) ||
+                SafeGetFiles(stage, "*.ini").Length == 0)
+                throw new InvalidDataException(T("Engine Module ที่คัดลอกมาไม่มี DLL และ INI ครบถ้วน", "The copied Engine Module is missing its DLL or INI file"));
+
+            if (hadOld)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+                Directory.Move(destination, backup);
+            }
+            try
+            {
+                Directory.Move(stage, destination);
+            }
+            catch
+            {
+                if (hadOld && Directory.Exists(backup) && !Directory.Exists(destination))
+                    Directory.Move(backup, destination);
+                throw;
+            }
+            if (hadOld) TryDeleteDirectory(backup);
+
+            if (existing is null)
+                _engineModules.Add(new EngineModuleEntry(source.Name, false, true, T("พบ DLL และ INI", "DLL and INI found")));
+            else
+            {
+                var index = _engineModules.IndexOf(existing);
+                _engineModules[index] = existing with { Valid = true, Details = T("พบ DLL และ INI", "DLL and INI found") };
+            }
+            SaveEngineModuleState();
+            return true;
+        }
+        finally
+        {
+            TryDeleteDirectory(stage);
+            if (Directory.Exists(backup) && !Directory.Exists(destination))
+                Directory.Move(backup, destination);
+            else
+                TryDeleteDirectory(backup);
+        }
     }
 
     private void InstallModTree(string sourceRoot, string modName)
@@ -1159,6 +1496,52 @@ internal sealed class MainForm : Form
         }
     }
 
+    private EngineModuleSource? FindEngineModuleContent(string root)
+    {
+        var candidates = new List<EngineModuleSource>();
+        var queue = new Queue<(string Path, int Depth)>();
+        queue.Enqueue((Path.GetFullPath(root), 0));
+        while (queue.Count > 0)
+        {
+            var (current, depth) = queue.Dequeue();
+            if (!Directory.Exists(current)) continue;
+            var dlls = SafeGetFiles(current, "*.dll");
+            var iniFiles = SafeGetFiles(current, "*.ini");
+            var folderName = Path.GetFileName(current.TrimEnd(Path.DirectorySeparatorChar));
+            var primaryDll = dlls.FirstOrDefault(file =>
+                string.Equals(Path.GetFileNameWithoutExtension(file), folderName, StringComparison.OrdinalIgnoreCase));
+            if (primaryDll is null && dlls.Length == 1) primaryDll = dlls[0];
+            if (dlls.Length > 0 && iniFiles.Length > 0)
+            {
+                if (primaryDll is null)
+                    throw new InvalidDataException(T($"โฟลเดอร์ {folderName} มี DLL หลายไฟล์ แต่ระบุ DLL หลักไม่ได้: ตั้งชื่อ DLL หลักให้ตรงกับชื่อโฟลเดอร์",
+                        $"Folder {folderName} contains multiple DLL files and the main module is ambiguous. Name the primary DLL to match the folder."));
+                var moduleName = Path.GetFileNameWithoutExtension(primaryDll);
+                if (!IsSafeEngineModuleName(moduleName))
+                    throw new InvalidDataException(T($"Engine Module มีชื่อไฟล์ที่ไม่รองรับ: {Path.GetFileName(primaryDll)}",
+                        $"Engine Module has an unsupported DLL name: {Path.GetFileName(primaryDll)}"));
+                candidates.Add(new EngineModuleSource(current, moduleName));
+                continue;
+            }
+
+            if (depth >= 5) continue;
+            foreach (var child in SafeGetDirectories(current))
+            {
+                var name = Path.GetFileName(child);
+                if (!name.StartsWith(".", StringComparison.Ordinal)) queue.Enqueue((child, depth + 1));
+            }
+        }
+
+        if (candidates.Count > 1)
+            throw new InvalidDataException(T("พบ Engine Module หลายตัวในแพ็กเกจ กรุณาติดตั้งแยกทีละโมดูล", "This package contains multiple Engine Modules. Install them one at a time."));
+        return candidates.SingleOrDefault();
+    }
+
+    private static bool IsSafeEngineModuleName(string name) =>
+        name.Length is > 0 and <= 100 &&
+        !name.StartsWith(".", StringComparison.Ordinal) &&
+        name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+
     private string? FindModContentRoot(string root)
     {
         var selectedName = Path.GetFileName(Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar));
@@ -1218,6 +1601,12 @@ internal sealed class MainForm : Form
                 .Where(d => (File.GetAttributes(d) & FileAttributes.ReparsePoint) == 0)
                 .ToArray();
         }
+        catch { return Array.Empty<string>(); }
+    }
+
+    private static string[] SafeGetFiles(string path, string pattern)
+    {
+        try { return Directory.GetFiles(path, pattern, System.IO.SearchOption.TopDirectoryOnly); }
         catch { return Array.Empty<string>(); }
     }
 
@@ -1282,6 +1671,12 @@ internal sealed class MainForm : Form
         catch { }
     }
 
+    private void RemoveSelectedItem()
+    {
+        if (IsEngineModulesTab) RemoveSelectedEngineModule();
+        else RemoveSelectedMod();
+    }
+
     private void RemoveSelectedMod()
     {
         if (_modsList.SelectedIndices.Count == 0) return;
@@ -1302,10 +1697,33 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void OpenModsFolder()
+    private void RemoveSelectedEngineModule()
+    {
+        if (_engineModulesList.SelectedIndices.Count == 0) return;
+        var selected = _engineModules[_engineModulesList.SelectedIndices[0]];
+        var answer = MessageBox.Show(this,
+            T($"ย้าย Engine Module “{selected.Name}” ไปถังรีไซเคิลหรือไม่?", $"Move Engine Module “{selected.Name}” to the Recycle Bin?"),
+            T("ยืนยันการลบโมดูล", "Confirm module removal"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (answer != DialogResult.Yes) return;
+        try
+        {
+            FileSystem.DeleteDirectory(Path.Combine(_engineModulesDirectory, selected.Name), UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
+            _engineModules.RemoveAll(module => string.Equals(module.Name, selected.Name, StringComparison.OrdinalIgnoreCase));
+            _unmanagedEnabledModules.RemoveAll(name => string.Equals(name, selected.Name, StringComparison.OrdinalIgnoreCase));
+            SaveEngineModuleStateAndRefresh(T($"นำ Engine Module {selected.Name} ออกแล้ว (ส่งไปถังรีไซเคิล)", $"Removed Engine Module {selected.Name} (sent to Recycle Bin)"));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, T("นำ Engine Module ออกไม่ได้", "Could not remove Engine Module"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void OpenCurrentFolder()
     {
         if (!EnsureGameFolder()) return;
-        Process.Start(new ProcessStartInfo { FileName = _modsDirectory, UseShellExecute = true });
+        var folder = IsEngineModulesTab ? _engineModulesDirectory : _modsDirectory;
+        Directory.CreateDirectory(folder);
+        Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true });
     }
 
     private void LaunchGame()
@@ -1381,7 +1799,14 @@ internal sealed record ThemePalette(
         Color.FromArgb(42, 61, 84), Color.FromArgb(43, 53, 68), Color.FromArgb(91, 105, 123));
 }
 
-internal sealed record ModEntry(string Name, bool Enabled);
+internal interface IToggleEntry
+{
+    bool Enabled { get; }
+}
+
+internal sealed record ModEntry(string Name, bool Enabled) : IToggleEntry;
+internal sealed record EngineModuleEntry(string Name, bool Enabled, bool Valid, string Details) : IToggleEntry;
+internal sealed record EngineModuleSource(string Path, string Name);
 internal sealed record ModLayout(bool Romfs, bool Exefs, bool Native)
 {
     public bool HasAny => Romfs || Exefs || Native;
